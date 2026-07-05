@@ -19,9 +19,13 @@ import android.graphics.RectF
  */
 object DashboardRenderer {
 
-    // 下半部（照片）佔 70% 高度、上半部（月曆＋今日事項）佔 30%；
+    // 下半部（照片）佔 60% 高度、上半部（月曆＋今日事項）佔 40%；
     // 上半部再左右對半分給月曆／今日事項。
-    private const val TOP_HEIGHT_RATIO = 0.3f
+    // 60% 不是隨便挑的：實測使用者相片幾乎都是 4:3 橫向（6560x4928／4096x3072），
+    // 而照片區寬度已經固定滿版，此比例下 fit/contain 出來的照片框跟 4:3 幾乎完全吻合，
+    // 上下留白趨近於零；再往上調（例如 70%）並不會讓照片變大（寬度已經頂滿），
+    // 只會多出更多沒用到的空白。
+    private const val TOP_HEIGHT_RATIO = 0.4f
 
     private const val SECTION_MARGIN_RATIO = 0.02f
     private const val CARD_STROKE_WIDTH_RATIO = 0.005f

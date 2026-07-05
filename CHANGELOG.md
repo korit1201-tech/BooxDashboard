@@ -17,6 +17,7 @@
 ### Fixed
 - 電量讀取改用 `ACTION_BATTERY_CHANGED` sticky broadcast，因為較新的 `BatteryManager.BATTERY_PROPERTY_CAPACITY` 在這台 BOOX 的 Onyx 客製 ROM 上不可靠（常回傳 -1）
 - 訂閱行事曆網址輸入框改用 URI 專用鍵盤（`TYPE_TEXT_VARIATION_URI`），避免預設文字鍵盤自動把首字母大寫，把貼上的 `https://` 悄悄改成 `Https://` 導致讀取失敗
+- 照片區比例從 70% 調成 60%：實測使用者相片全部是 4:3 橫向（用 Pillow 檢查裝置上 7 張真實照片，尺寸落在 6560x4928／4096x3072，比例 1.33），而照片區寬度本來就固定滿版，70% 高度下 fit/contain 會在上下留下約 220px 空白；60% 讓框的長寬比幾乎完全貼合 4:3，空白降到 30px 內，且照片實際顯示尺寸完全不變（本來就是寬度吃滿）
 
 ### Changed
 - 原本規劃走 Google Photos Library API 整合相簿，調查後發現 Google 已於 2025 年 3 月收回第三方讀取既有相簿/自動同步的權限，故改採 Android 系統相片選擇器，效果為一次性多選而非持續同步
