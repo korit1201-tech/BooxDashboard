@@ -9,9 +9,14 @@
 - 長按月曆區可勾選要顯示哪些行事曆（支援同一 Google 帳號下的多個行事曆），對話框內附「管理 Google 帳號」捷徑開啟系統帳號設定頁面
 - 每次 App 從背景回到前景（onResume）都會重新查詢一次行事曆／照片資料
 - 照片來源新增「系統相片選擇器多選」（`PickMultipleVisualMedia`），與資料夾內容合併成同一個隨機池；可從裝置上任何提供圖片的 App 選（含 Google 相簿 App，前提是該 App 已安裝）
+- 新增「訂閱行事曆網址（免登入）」：用 `CalendarContract.ACCOUNT_TYPE_LOCAL` 建立本機行事曆，搭配自寫的精簡 ICS 解析器（`IcsParser`）抓取公開 ICS 網址內容並寫入事件，完全不需要登入任何帳號；重複事件的 `RRULE` 原封不動存進去，展開交給系統 `CalendarProvider`。已用 Taiwan 公開假日 ICS 實測，328 筆事件正確解析寫入，且訂閱的行事曆會出現在既有的「選擇要顯示的行事曆」清單中
+- 「行事曆設定」長按選單新增「管理已訂閱的網址」，可移除不要的訂閱
+- 每小時自動整理時一併重新抓取所有訂閱的 ICS 網址
+- 下方照片區高度比例從 50% 調整為 70%，月曆／今日事項區從 50% 縮為 30%
 
 ### Fixed
 - 電量讀取改用 `ACTION_BATTERY_CHANGED` sticky broadcast，因為較新的 `BatteryManager.BATTERY_PROPERTY_CAPACITY` 在這台 BOOX 的 Onyx 客製 ROM 上不可靠（常回傳 -1）
+- 訂閱行事曆網址輸入框改用 URI 專用鍵盤（`TYPE_TEXT_VARIATION_URI`），避免預設文字鍵盤自動把首字母大寫，把貼上的 `https://` 悄悄改成 `Https://` 導致讀取失敗
 
 ### Changed
 - 原本規劃走 Google Photos Library API 整合相簿，調查後發現 Google 已於 2025 年 3 月收回第三方讀取既有相簿/自動同步的權限，故改採 Android 系統相片選擇器，效果為一次性多選而非持續同步

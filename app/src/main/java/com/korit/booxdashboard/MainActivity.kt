@@ -12,7 +12,9 @@ import android.provider.Settings
 import android.view.GestureDetector
 import android.view.MotionEvent
 import android.view.WindowManager
+import android.widget.EditText
 import android.widget.ImageView
+import android.widget.LinearLayout
 import android.widget.Toast
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -26,18 +28,19 @@ import java.time.YearMonth
  * 互動設計：
  * - 點擊左上月曆的翻頁箭頭：切換 displayedMonth（月曆顯示的月份），跟「今天」脫鉤。
  * - 點擊左上月曆的某一天：右上「事項」改顯示該天的事件（selectedDate）。
- * - 長按左上月曆區：開「選擇要顯示的行事曆」對話框（一個 Google 帳號常有多個行事曆，
- *   例如節日曆／家庭／個人，讓使用者自己勾選要不要顯示，而不是全部混在一起顯示）。
- *   對話框裡也有「管理 Google 帳號」按鈕，直接開系統帳號設定頁面新增/重新登入/手動同步——
- *   App 本身不做 OAuth 登入，帳號登入永遠交給系統處理，我們只讀 CalendarContract。
+ * - 長按左上月曆區：開「行事曆設定」選單，可以「選擇要顯示的行事曆」（一個 Google 帳號
+ *   常有多個行事曆，例如節日曆／家庭／個人）、「訂閱行事曆網址」（不需要登入任何帳號，
+ *   直接用公開的 ICS 網址建立一個本機行事曆，見 CalendarSubscriptions／IcsParser）、
+ *   「管理已訂閱的網址」、或「管理 Google 帳號」（開系統帳號設定頁面新增/重新登入/手動
+ *   同步——App 本身不做 OAuth 登入，帳號登入永遠交給系統處理，我們只讀 CalendarContract）。
  * - 長按左下/右下的照片區：跳出選單選「資料夾」或「系統相片選擇器」。相片選擇器可以
  *   一次多選照片，來源包含 Google 相簿 App（Google Photos Library API 在 2025 年 3 月起
  *   已不再開放第三方讀取既有相簿/自動同步，改走系統相片選擇器是目前唯一可行的整合方式，
  *   代價是新照片要使用者自己重新選，不會自動同步）。挑好的照片會跟資料夾內容合併成同一個
  *   隨機池，每次刷新都可能抽到任何一張。
  * - 點擊/長按畫面其他地方：沿用 Phase 1 局部刷新（GU）／整頁全刷（GC）測試。
- * - 每小時自動重新整理一次；若真實日期已跨天（例如整晚沒關過），會自動把
- *   displayedMonth／selectedDate 都跳回新的「今天」，而不是停留在舊日期上。
+ * - 每小時自動重新整理一次（同時重新抓取所有訂閱的 ICS 網址）；若真實日期已跨天
+ *   （例如整晚沒關過），會自動把 displayedMonth／selectedDate 都跳回新的「今天」。
  * - 每次 onResume（例如從帳號設定或資料夾選擇器返回）都會重新查詢一次資料，
  *   這樣使用者剛新增完 Google 帳號或改完同步設定，回到 App 就能立刻看到更新。
  * - 電量低於 20% 時，「事項」卡片標題列右側會顯示小小的電量警示文字。
@@ -54,9 +57,14 @@ class MainActivity : AppCompatActivity() {
     private val refreshHandler = Handler(Looper.getMainLooper())
     private val hourlyRefreshRunnable = object : Runnable {
         override fun run() {
-            refreshIfDateRolledOver()
-            renderDashboard()
-            EinkRefresh.full(dashboardImageView)
+            applyDateRolloverIfNeeded()
+            Thread {
+                CalendarSubscriptions.syncAll(this@MainActivity)
+                runOnUiThread {
+                    renderDashboard()
+                    EinkRefresh.full(dashboardImageView)
+                }
+            }.start()
             refreshHandler.postDelayed(this, HOURLY_INTERVAL_MS)
         }
     }
@@ -172,12 +180,106 @@ class MainActivity : AppCompatActivity() {
         val layout = DashboardRenderer.computeLayout(dashboardImageView.width, dashboardImageView.height)
         when {
             layout.photoRect.contains(x, y) -> showPhotoSourceDialog()
-            layout.calendarRect.contains(x, y) -> showCalendarPickerDialog()
+            layout.calendarRect.contains(x, y) -> showCalendarMenu()
             else -> {
                 renderDashboard()
                 EinkRefresh.full(dashboardImageView)
             }
         }
+    }
+
+    private fun showCalendarMenu() {
+        val options = arrayOf("選擇要顯示的行事曆", "訂閱行事曆網址（免登入）", "管理已訂閱的網址", "管理 Google 帳號")
+        AlertDialog.Builder(this)
+            .setTitle("行事曆設定")
+            .setItems(options) { _, which ->
+                when (which) {
+                    0 -> showCalendarPickerDialog()
+                    1 -> showAddSubscriptionDialog()
+                    2 -> showManageSubscriptionsDialog()
+                    3 -> openAccountSettings()
+                }
+            }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
+    /**
+     * 訂閱公開 ICS 網址不需要登入任何帳號——直接抓網址內容解析後寫進本機行事曆
+     * （CalendarSubscriptions），跟要不要有 Google 帳號完全無關。
+     */
+    private fun showAddSubscriptionDialog() {
+        if (!hasPermission(Manifest.permission.WRITE_CALENDAR)) {
+            Toast.makeText(this, "尚未取得行事曆寫入權限，無法訂閱", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val density = resources.displayMetrics.density
+        val pad = (16 * density).toInt()
+        val nameInput = EditText(this).apply { hint = "顯示名稱（例如：公司行事曆）" }
+        val urlInput = EditText(this).apply {
+            hint = "ICS 網址（https://...ics）"
+            // 一般文字欄位預設會把第一個字母自動大寫，網址型別的鍵盤不會有這個行為，
+            // 不然使用者沒注意到的話貼上的網址會被偷偷改成 "Https://..." 而讀取失敗。
+            inputType = android.text.InputType.TYPE_TEXT_VARIATION_URI or android.text.InputType.TYPE_CLASS_TEXT
+        }
+        val layout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(pad, pad, pad, pad)
+            addView(nameInput)
+            addView(urlInput)
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle("訂閱行事曆網址")
+            .setView(layout)
+            .setPositiveButton("訂閱") { _, _ ->
+                val url = urlInput.text.toString().trim()
+                val name = nameInput.text.toString().trim().ifEmpty { "訂閱行事曆" }
+                if (url.isEmpty()) {
+                    Toast.makeText(this, "請輸入網址", Toast.LENGTH_SHORT).show()
+                    return@setPositiveButton
+                }
+                Toast.makeText(this, "正在抓取行事曆…", Toast.LENGTH_SHORT).show()
+                Thread {
+                    val result = CalendarSubscriptions.addSubscription(this, url, name)
+                    runOnUiThread {
+                        result.onSuccess {
+                            renderDashboard()
+                            EinkRefresh.full(dashboardImageView)
+                            Toast.makeText(this, "訂閱成功：$name", Toast.LENGTH_SHORT).show()
+                        }.onFailure { e ->
+                            Toast.makeText(this, "訂閱失敗：${e.message}", Toast.LENGTH_LONG).show()
+                        }
+                    }
+                }.start()
+            }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
+    private fun showManageSubscriptionsDialog() {
+        val subs = CalendarSubscriptions.list(this)
+        if (subs.isEmpty()) {
+            Toast.makeText(this, "目前沒有訂閱任何網址", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val labels = subs.map { it.displayName }.toTypedArray()
+        AlertDialog.Builder(this)
+            .setTitle("點選要移除的訂閱")
+            .setItems(labels) { _, which ->
+                val sub = subs[which]
+                AlertDialog.Builder(this)
+                    .setMessage("要移除「${sub.displayName}」這個訂閱嗎？")
+                    .setPositiveButton("移除") { _, _ ->
+                        CalendarSubscriptions.removeSubscription(this, sub)
+                        renderDashboard()
+                        EinkRefresh.full(dashboardImageView)
+                    }
+                    .setNegativeButton("取消", null)
+                    .show()
+            }
+            .setNegativeButton("關閉", null)
+            .show()
     }
 
     private fun showPhotoSourceDialog() {
@@ -227,7 +329,6 @@ class MainActivity : AppCompatActivity() {
                 EinkRefresh.full(dashboardImageView)
             }
             .setNegativeButton("取消", null)
-            .setNeutralButton("管理 Google 帳號") { _, _ -> openAccountSettings() }
             .show()
     }
 
@@ -258,8 +359,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun requestMissingPermissions() {
-        val needed = listOf(Manifest.permission.READ_CALENDAR, Manifest.permission.READ_EXTERNAL_STORAGE)
-            .filter { ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED }
+        val needed = listOf(
+            Manifest.permission.READ_CALENDAR,
+            Manifest.permission.WRITE_CALENDAR,
+            Manifest.permission.READ_EXTERNAL_STORAGE
+        ).filter { ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED }
         if (needed.isNotEmpty()) {
             permissionLauncher.launch(needed.toTypedArray())
         }

@@ -19,9 +19,9 @@ import android.graphics.RectF
  */
 object DashboardRenderer {
 
-    // 上半部（月曆＋今日事項）與下半部（照片）各佔一半高度；
+    // 下半部（照片）佔 70% 高度、上半部（月曆＋今日事項）佔 30%；
     // 上半部再左右對半分給月曆／今日事項。
-    private const val TOP_HEIGHT_RATIO = 0.5f
+    private const val TOP_HEIGHT_RATIO = 0.3f
 
     private const val SECTION_MARGIN_RATIO = 0.02f
     private const val CARD_STROKE_WIDTH_RATIO = 0.005f
