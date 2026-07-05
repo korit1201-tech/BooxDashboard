@@ -9,15 +9,19 @@ import androidx.documentfile.provider.DocumentFile
 import java.io.File
 
 /**
- * 照片來源優先順序：
- * 1. 使用者長按照片區、透過 SAF 選過的資料夾（存在 SharedPreferences，跨重啟仍記得）
- * 2. 退回掃描裝置固定路徑 /sdcard/DCIM/Frame/（需要 READ_EXTERNAL_STORAGE）
- * 3. 都沒有就回傳 null，交給 DashboardRenderer 顯示「長按選擇資料夾」的提示
+ * 照片候選來源會合併成同一個隨機池，每次刷新從池子裡隨機挑一張：
+ * 1. 使用者用系統相片選擇器多選的照片（存 content:// uri，可能來自 Google 相簿等 App）
+ * 2. 使用者長按照片區、透過 SAF 選過的資料夾
+ * 3. 都沒設定的話，退回掃描裝置固定路徑 /sdcard/DCIM/Frame/（需要 READ_EXTERNAL_STORAGE）
+ *
+ * 候選清單只存「怎麼解出這張圖」的 lazy 動作，抽中才真的解碼，避免每次刷新都把
+ * 所有候選圖片全部讀進記憶體（3GB RAM 的裝置禁不起這樣搞）。
  */
 object PhotoRepository {
 
     private const val PREFS_NAME = "boox_dashboard_prefs"
     private const val KEY_PHOTO_DIR_URI = "photo_dir_uri"
+    private const val KEY_PICKED_URIS = "picked_photo_uris"
 
     private val LEGACY_PHOTO_DIR = File(Environment.getExternalStorageDirectory(), "DCIM/Frame")
     private val IMAGE_EXTENSIONS = setOf("jpg", "jpeg", "png", "webp")
@@ -35,22 +39,53 @@ object PhotoRepository {
         return Uri.parse(stored)
     }
 
-    fun pickRandomPhoto(context: Context, targetWidth: Int): Bitmap? {
-        val treeUri = getTreeUri(context)
-        if (treeUri != null) {
-            pickRandomFromTree(context, treeUri, targetWidth)?.let { return it }
-        }
-        return pickRandomFromLegacyFolder(targetWidth)
+    fun savePickedUris(context: Context, uris: List<Uri>) {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putStringSet(KEY_PICKED_URIS, uris.map { it.toString() }.toSet())
+            .apply()
     }
 
-    private fun pickRandomFromTree(context: Context, treeUri: Uri, targetWidth: Int): Bitmap? {
-        val dir = DocumentFile.fromTreeUri(context, treeUri) ?: return null
-        val images = dir.listFiles().filter { it.isFile && (it.type?.startsWith("image/") == true) }
-        if (images.isEmpty()) return null
+    private fun getPickedUris(context: Context): List<Uri> {
+        val stored = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getStringSet(KEY_PICKED_URIS, null) ?: return emptyList()
+        return stored.map { Uri.parse(it) }
+    }
 
-        val file = images.random()
+    fun pickRandomPhoto(context: Context, targetWidth: Int): Bitmap? {
+        val candidates = mutableListOf<() -> Bitmap?>()
+
+        getPickedUris(context).forEach { uri ->
+            candidates.add { decodeUri(context, uri, targetWidth) }
+        }
+
+        val treeUri = getTreeUri(context)
+        val treeImages = treeUri?.let { uri ->
+            DocumentFile.fromTreeUri(context, uri)
+                ?.listFiles()
+                ?.filter { it.isFile && (it.type?.startsWith("image/") == true) }
+        }.orEmpty()
+
+        if (treeImages.isNotEmpty()) {
+            treeImages.forEach { doc ->
+                candidates.add { decodeUri(context, doc.uri, targetWidth) }
+            }
+        } else {
+            val files = LEGACY_PHOTO_DIR.listFiles { file ->
+                file.isFile && file.extension.lowercase() in IMAGE_EXTENSIONS
+            }.orEmpty()
+            files.forEach { file ->
+                candidates.add { decodeFile(file, targetWidth) }
+            }
+        }
+
+        if (candidates.isEmpty()) return null
+        return candidates.random().invoke()
+    }
+
+    private fun decodeUri(context: Context, uri: Uri, targetWidth: Int): Bitmap? {
         return try {
-            context.contentResolver.openInputStream(file.uri)?.use { input ->
+            context.contentResolver.openInputStream(uri)?.use { input ->
                 decodeSampledBitmapFromBytes(input.readBytes(), targetWidth)
             }
         } catch (e: Exception) {
@@ -58,13 +93,7 @@ object PhotoRepository {
         }
     }
 
-    private fun pickRandomFromLegacyFolder(targetWidth: Int): Bitmap? {
-        val files = LEGACY_PHOTO_DIR.listFiles { file ->
-            file.isFile && file.extension.lowercase() in IMAGE_EXTENSIONS
-        }
-        if (files.isNullOrEmpty()) return null
-
-        val file = files.random()
+    private fun decodeFile(file: File, targetWidth: Int): Bitmap? {
         return try {
             decodeSampledBitmapFromBytes(file.readBytes(), targetWidth)
         } catch (e: Exception) {

@@ -27,6 +27,7 @@ object DashboardRenderer {
     private const val CARD_STROKE_WIDTH_RATIO = 0.005f
     private const val CARD_CORNER_RADIUS_RATIO = 0.025f
     private const val CONTENT_PADDING_RATIO = 0.035f
+    private const val LOW_BATTERY_THRESHOLD = 20
 
     private val COLOR_CARD_BORDER = Color.rgb(80, 80, 80)
     // 週六／週日在低飽和度彩色面板上跟平日的色差很小，所以主要差異化改用「形狀」
@@ -90,7 +91,8 @@ object DashboardRenderer {
         selectedDayOfMonth: Int?,
         eventsSectionTitle: String,
         events: List<TodayEvent>,
-        photo: Bitmap?
+        photo: Bitmap?,
+        batteryPercent: Int? = null
     ): Bitmap {
         val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
@@ -103,7 +105,7 @@ object DashboardRenderer {
         drawCardBorder(canvas, layout.photoRect, width)
 
         drawCalendarSection(canvas, insetForContent(layout.calendarRect), calendarData, selectedDayOfMonth)
-        drawEventsSection(canvas, insetForContent(layout.eventsRect), eventsSectionTitle, events)
+        drawEventsSection(canvas, insetForContent(layout.eventsRect), eventsSectionTitle, events, batteryPercent)
         drawPhotoSection(canvas, insetForContent(layout.photoRect), photo)
 
         return bitmap
@@ -292,13 +294,30 @@ object DashboardRenderer {
         }
     }
 
-    private fun drawEventsSection(canvas: Canvas, rect: RectF, title: String, events: List<TodayEvent>) {
+    private fun drawEventsSection(
+        canvas: Canvas,
+        rect: RectF,
+        title: String,
+        events: List<TodayEvent>,
+        batteryPercent: Int?
+    ) {
         val titlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = Color.BLACK
             textSize = rect.height() * 0.10f
             isFakeBoldText = true
         }
         canvas.drawText(title, rect.left, rect.top + titlePaint.textSize, titlePaint)
+
+        // 電量吃緊時在標題列右側放個小警示，不佔額外版面、不搶「今日事項」的視覺重點。
+        if (batteryPercent != null && batteryPercent < LOW_BATTERY_THRESHOLD) {
+            val batteryPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = Color.rgb(180, 30, 30)
+                textSize = titlePaint.textSize * 0.5f
+                textAlign = Paint.Align.RIGHT
+                isFakeBoldText = true
+            }
+            canvas.drawText("電量低 $batteryPercent%", rect.right, rect.top + batteryPaint.textSize, batteryPaint)
+        }
 
         val contentTop = rect.top + titlePaint.textSize * 1.6f
 

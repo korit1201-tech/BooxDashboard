@@ -34,6 +34,8 @@ android {
 dependencies {
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.appcompat:appcompat:1.7.0")
+    // 系統相片選擇器（PickMultipleVisualMedia），可從 Google 相簿等 App 多選照片
+    implementation("androidx.activity:activity-ktx:1.9.3")
     // SAF 選取的照片資料夾用 DocumentFile 存取
     implementation("androidx.documentfile:documentfile:1.0.1")
     // Onyx E Ink 刷新控制 SDK（EpdController / EpdDeviceManager）

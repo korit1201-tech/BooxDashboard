@@ -4,6 +4,18 @@
 
 ## [Unreleased]
 
+### Added
+- 電量低於 20% 時，「今日事項」卡片標題列右側顯示紅字電量警示
+- 長按月曆區可勾選要顯示哪些行事曆（支援同一 Google 帳號下的多個行事曆），對話框內附「管理 Google 帳號」捷徑開啟系統帳號設定頁面
+- 每次 App 從背景回到前景（onResume）都會重新查詢一次行事曆／照片資料
+- 照片來源新增「系統相片選擇器多選」（`PickMultipleVisualMedia`），與資料夾內容合併成同一個隨機池；可從裝置上任何提供圖片的 App 選（含 Google 相簿 App，前提是該 App 已安裝）
+
+### Fixed
+- 電量讀取改用 `ACTION_BATTERY_CHANGED` sticky broadcast，因為較新的 `BatteryManager.BATTERY_PROPERTY_CAPACITY` 在這台 BOOX 的 Onyx 客製 ROM 上不可靠（常回傳 -1）
+
+### Changed
+- 原本規劃走 Google Photos Library API 整合相簿，調查後發現 Google 已於 2025 年 3 月收回第三方讀取既有相簿/自動同步的權限，故改採 Android 系統相片選擇器，效果為一次性多選而非持續同步
+
 ## [0.1.0] - 2026-07-06
 
 ### Added
