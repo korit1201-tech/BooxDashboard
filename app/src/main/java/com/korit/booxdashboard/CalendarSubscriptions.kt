@@ -10,7 +10,13 @@ import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
 
-data class IcsSubscription(val url: String, val displayName: String, val calendarId: Long)
+data class IcsSubscription(
+    val url: String,
+    val displayName: String,
+    val calendarId: Long,
+    val lastModified: String? = null,
+    val etag: String? = null
+)
 
 /**
  * 訂閱公開的 ICS 行事曆網址，完全不需要登入任何帳號：
@@ -30,7 +36,13 @@ object CalendarSubscriptions {
         val arr = JSONArray(raw)
         return (0 until arr.length()).map { i ->
             val o = arr.getJSONObject(i)
-            IcsSubscription(o.getString("url"), o.getString("displayName"), o.getLong("calendarId"))
+            IcsSubscription(
+                o.getString("url"),
+                o.getString("displayName"),
+                o.getLong("calendarId"),
+                lastModified = if (o.isNull("lastModified")) null else o.optString("lastModified"),
+                etag = if (o.isNull("etag")) null else o.optString("etag")
+            )
         }
     }
 
@@ -40,9 +52,9 @@ object CalendarSubscriptions {
             val resolver = context.contentResolver
             val calendarId = createLocalCalendar(resolver, displayName)
             val sub = IcsSubscription(url, displayName, calendarId)
-            syncSubscription(resolver, sub)
-            save(context, list(context) + sub)
-            Result.success(sub)
+            val synced = syncSubscription(resolver, sub)
+            save(context, list(context) + synced)
+            Result.success(synced)
         } catch (e: Exception) {
             Result.failure(e)
         }
@@ -54,16 +66,22 @@ object CalendarSubscriptions {
         save(context, list(context).filterNot { it.calendarId == sub.calendarId })
     }
 
-    /** 重新抓取所有已訂閱網址的最新內容。要在背景執行緒呼叫；單一訂閱失敗不會擋住其他的。 */
+    /**
+     * 重新抓取所有已訂閱網址的最新內容。要在背景執行緒呼叫；單一訂閱失敗不會擋住其他的。
+     * 每次都會帶上次抓到的 Last-Modified/ETag 做條件式 GET（304 代表內容沒變），
+     * ICS 內容沒變就跳過整批刪除／重新寫入行事曆事件的動作，省下每小時一次不必要的網路和資料庫負擔。
+     */
     fun syncAll(context: Context) {
         val resolver = context.contentResolver
-        list(context).forEach { sub ->
+        val updated = list(context).map { sub ->
             try {
                 syncSubscription(resolver, sub)
             } catch (e: Exception) {
                 // 忽略單一訂閱的同步失敗（網路暫時不通、網址失效等），下次排程再試
+                sub
             }
         }
+        save(context, updated)
     }
 
     private fun prefs(context: Context) = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -76,6 +94,8 @@ object CalendarSubscriptions {
                     put("url", s.url)
                     put("displayName", s.displayName)
                     put("calendarId", s.calendarId)
+                    put("lastModified", s.lastModified ?: JSONObject.NULL)
+                    put("etag", s.etag ?: JSONObject.NULL)
                 }
             )
         }
@@ -105,9 +125,10 @@ object CalendarSubscriptions {
         return ContentUris.parseId(uri)
     }
 
-    private fun syncSubscription(resolver: ContentResolver, sub: IcsSubscription) {
-        val icsText = fetchText(sub.url)
-        val events = IcsParser.parse(icsText)
+    /** 回傳更新過 lastModified/etag 的訂閱物件；ICS 內容沒變（304）時直接跳過資料庫寫入。 */
+    private fun syncSubscription(resolver: ContentResolver, sub: IcsSubscription): IcsSubscription {
+        val fetched = fetchIfChanged(sub) ?: return sub
+        val events = IcsParser.parse(fetched.text)
 
         // 整批換新：刪掉這個行事曆下所有舊事件，插入這次抓到的內容
         val eventsUri = localSyncAdapterUri(CalendarContract.Events.CONTENT_URI)
@@ -129,13 +150,30 @@ object CalendarSubscriptions {
             }
             resolver.insert(eventsUri, values)
         }
+
+        return sub.copy(lastModified = fetched.lastModified, etag = fetched.etag)
     }
 
-    private fun fetchText(urlString: String): String {
-        val connection = URL(urlString).openConnection() as HttpURLConnection
+    private class FetchResult(val text: String, val lastModified: String?, val etag: String?)
+
+    /**
+     * 帶上次抓到的 Last-Modified/ETag 做條件式 GET；伺服器回 304 代表內容沒變，
+     * 回傳 null 讓呼叫端跳過整批刪除／重新寫入。不是每個 ICS 主機都會回這兩個標頭，
+     * 沒有的話就退回每次都全抓，行為跟改動前一樣，不會變差。
+     */
+    private fun fetchIfChanged(sub: IcsSubscription): FetchResult? {
+        val connection = URL(sub.url).openConnection() as HttpURLConnection
         connection.connectTimeout = 15000
         connection.readTimeout = 15000
         connection.requestMethod = "GET"
-        return connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+        sub.lastModified?.let { connection.setRequestProperty("If-Modified-Since", it) }
+        sub.etag?.let { connection.setRequestProperty("If-None-Match", it) }
+
+        if (connection.responseCode == HttpURLConnection.HTTP_NOT_MODIFIED) {
+            connection.disconnect()
+            return null
+        }
+        val text = connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+        return FetchResult(text, connection.getHeaderField("Last-Modified"), connection.getHeaderField("ETag"))
     }
 }

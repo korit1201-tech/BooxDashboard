@@ -5,6 +5,9 @@
 ## [Unreleased]
 
 ### Added
+- `EinkRefresh` 重構：互動觸發的局部刷新改用 `UpdateMode.REGAL`（官方文件說是殘影最少的局部模式，取代原本沿用 Phase 1 demo 的 `GU`），並新增自動計數——連續 5 次局部刷新後自動升級成一次 `GC` 全刷，藉此定期恢復 Kaleido Plus 彩色圖層的飽和度，不必等整點的 hourly 全刷或使用者手動長按
+- 每小時的例行整理不再無條件強制整頁全刷（`GC` 是多輪波形的全域刷新，耗電明顯比局部刷新高）：改成跟互動共用同一套 REGAL／每 5 次自動升級全刷的邏輯，只有真的偵測到跨天時才強制全刷；一天 24 次「喚醒面板刷新」大部分變輕量，同時仍會定期升級成全刷維持色彩飽和度
+- ICS 訂閱同步改用條件式 GET（帶上次拿到的 `Last-Modified`/`ETag`），伺服器回 304 時直接跳過整批刪除／重寫行事曆事件，省下每小時一次不必要的資料庫負擔（部分 ICS 主機不回這兩個標頭時，行為退回原本每次全抓，不會變差）；重新抓取的頻率維持每小時一次不變
 - 電量低於 20% 時，「今日事項」卡片標題列右側顯示紅字電量警示
 - 長按月曆區可勾選要顯示哪些行事曆（支援同一 Google 帳號下的多個行事曆），對話框內附「管理 Google 帳號」捷徑開啟系統帳號設定頁面
 - 每次 App 從背景回到前景（onResume）都會重新查詢一次行事曆／照片資料
@@ -21,6 +24,10 @@
 
 ### Changed
 - 原本規劃走 Google Photos Library API 整合相簿，調查後發現 Google 已於 2025 年 3 月收回第三方讀取既有相簿/自動同步的權限，故改採 Android 系統相片選擇器，效果為一次性多選而非持續同步
+
+### 已知限制
+- 曾嘗試新增 `FrontLightManager`（App 啟動／每小時整理時呼叫 Onyx SDK `Device.currentDevice().closeFrontLight()` 自動關前光），實機測試後移除：這台 BOOX Nova Air C 的 Android 11 ROM 上，`Device.currentDevice()` 內部靠 hidden API 反射（`android.onyx.hardware.DeviceController`）偵測硬體能力，這些反射呼叫全部被系統的 hidden-API 黑名單擋掉（`blacklist, reflection, denied`），偵測 fallback 成抓不到任何控制能力的通用裝置，`isLightOn()`/`closeFrontLight()` 實際上是空的，不會崩潰但也不會真的關燈。裝置上也查不到能繞開 SDK、直接寫入的前光 `Settings` key。若要真的關前光，目前只能請使用者自己在系統面板手動關閉
+- `UpdateMode.REGAL` 是否真的按預期套用到彩色圖層，同樣受上述 hidden API 限制影響（`EpdController` 底層也走同一套裝置偵測），且 screencap 只能截到 framebuffer 內容、無法反映 E Ink 實際刷新時的殘影/色彩光學效果，需要使用者盯著實機肉眼比對 REGAL 前後的觀感才能確認
 
 ## [0.1.0] - 2026-07-06
 
