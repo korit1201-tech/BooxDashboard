@@ -1,6 +1,8 @@
 package com.korit.booxdashboard
 
 import android.Manifest
+import android.accounts.Account
+import android.content.ContentResolver
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
@@ -8,6 +10,7 @@ import android.os.BatteryManager
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.provider.CalendarContract
 import android.provider.Settings
 import android.view.GestureDetector
 import android.view.MotionEvent
@@ -133,6 +136,40 @@ class MainActivity : AppCompatActivity() {
 
         requestMissingPermissions()
         refreshHandler.postDelayed(hourlyRefreshRunnable, HOURLY_INTERVAL_MS)
+
+        maybeShowFreezeReminderOnFirstLaunch()
+    }
+
+    /**
+     * 這台 BOOX 的系統「凍結設置」預設會在「安裝 APP 後自動開啟凍結」，被凍結的 App 一旦離開
+     * 前景就會被系統整個停用，導致儀表板停在舊畫面、不再自動更新（換照片／換行事曆）。
+     * 剛裝好、App 還在前景時提醒最即時（此時還沒被凍），引導使用者去把凍結關掉。
+     * 用 SharedPreferences 記一個旗標只在每次全新安裝後提醒一次；-r 更新安裝會保留旗標不重複打擾，
+     * 而完整解除安裝重裝（也正是系統會重新自動凍結的時機）會清掉旗標、剛好重新提醒。
+     */
+    private fun maybeShowFreezeReminderOnFirstLaunch() {
+        val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+        if (prefs.getBoolean(KEY_FREEZE_HINT_SHOWN, false)) return
+        prefs.edit().putBoolean(KEY_FREEZE_HINT_SHOWN, true).apply()
+        showFreezeReminderDialog()
+    }
+
+    /**
+     * 說明如何把本 App 從 BOOX 系統凍結名單移除。可從首次啟動自動彈出，也可從月曆長按選單手動叫出。
+     */
+    private fun showFreezeReminderDialog() {
+        AlertDialog.Builder(this)
+            .setTitle("讓儀表板保持自動更新")
+            .setMessage(
+                "BOOX 系統預設會「凍結」背景 App，被凍結後儀表板會停在舊畫面、不再自動換照片與更新行事曆。\n\n" +
+                    "請確認本 App 沒有被凍結：\n" +
+                    "1. 回 BOOX 桌面 →「應用」\n" +
+                    "2. 點右上角的「雪花 ❄️」圖示（凍結設置）\n" +
+                    "3. 找到「BOOX Dashboard」，把它的開關切成 OFF（不凍結）\n\n" +
+                    "提醒：每次重新安裝本 App 後，系統可能會再次自動凍結，需要重做一次；或直接關掉該頁最上面的「安裝 APP 後自動開啟凍結」。"
+            )
+            .setPositiveButton("知道了", null)
+            .show()
     }
 
     override fun onResume() {
@@ -193,7 +230,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showCalendarMenu() {
-        val options = arrayOf("選擇要顯示的行事曆", "訂閱行事曆網址（免登入）", "管理已訂閱的網址", "管理 Google 帳號")
+        val options = arrayOf("選擇要顯示的行事曆", "訂閱行事曆網址（免登入）", "管理已訂閱的網址", "管理 Google 帳號", "背景凍結提醒（沒自動更新看這）")
         AlertDialog.Builder(this)
             .setTitle("行事曆設定")
             .setItems(options) { _, which ->
@@ -202,6 +239,7 @@ class MainActivity : AppCompatActivity() {
                     1 -> showAddSubscriptionDialog()
                     2 -> showManageSubscriptionsDialog()
                     3 -> openAccountSettings()
+                    4 -> showFreezeReminderDialog()
                 }
             }
             .setNegativeButton("取消", null)
@@ -376,10 +414,34 @@ class MainActivity : AppCompatActivity() {
     private fun hasPermission(permission: String) =
         ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED
 
+    /**
+     * 主動要求 Android 立刻對這台裝置上的 Google 帳號做一次行事曆同步，不要被動等
+     * Google 的推播通知（"tickle"）——實測發現這台裝置的行事曆同步幾乎都是靠推播觸發，
+     * 一旦推播沒送達（例如這台 Onyx ROM 對 GCM/FCM 的支援不完全穩定），就只能等內建
+     * 每天一次的排程週期，導致手機上編輯/新增的事項要等一整天才會出現在這台裝置上。
+     * requestSync 只是「提出要求」，不保證立刻完成，但比被動等待可靠很多。
+     */
+    private fun requestCalendarSync() {
+        if (!hasPermission(Manifest.permission.READ_CALENDAR)) return
+        val extras = Bundle().apply {
+            putBoolean(ContentResolver.SYNC_EXTRAS_MANUAL, true)
+            putBoolean(ContentResolver.SYNC_EXTRAS_EXPEDITED, true)
+        }
+        CalendarRepository.listCalendars(contentResolver)
+            .map { it.accountName }
+            .distinct()
+            .filter { it.contains("@") } // 排掉本機訂閱行事曆用的假帳號名稱，只對真正的 Google 帳號要求同步
+            .forEach { accountName ->
+                ContentResolver.requestSync(Account(accountName, "com.google"), CalendarContract.AUTHORITY, extras)
+            }
+    }
+
     private fun renderDashboard() {
         val width = dashboardImageView.width
         val height = dashboardImageView.height
         if (width == 0 || height == 0) return
+
+        requestCalendarSync()
 
         val events: List<TodayEvent>
         if (hasPermission(Manifest.permission.READ_CALENDAR)) {
@@ -420,5 +482,7 @@ class MainActivity : AppCompatActivity() {
     companion object {
         private const val HOURLY_INTERVAL_MS = 60 * 60 * 1000L
         private const val MAX_PICKED_PHOTOS = 50
+        private const val PREFS_NAME = "boox_dashboard_prefs"
+        private const val KEY_FREEZE_HINT_SHOWN = "freeze_hint_shown"
     }
 }
