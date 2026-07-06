@@ -2,6 +2,11 @@
 
 本專案的重要變更都記錄在這份檔案。格式參考 [Keep a Changelog](https://keepachangelog.com/)。
 
+## [0.2.1] - 2026-07-06
+
+### Fixed
+- **修正照片／今日事項在點擊或每小時整理後沒有真的刷新畫面**：0.2.0 把局部刷新從 `GU` 改成 `UpdateMode.REGAL` 想省電，但實機肉眼確認後發現這台 BOOX Nova Air C 的 ROM 對 `EpdController` 硬體偵測用的 hidden API 反射被系統黑名單擋掉，REGAL 因此靜默失效——`Bitmap` 資料其實都有正確更新（screencap 截圖看得到新內容），只是 E Ink 面板沒有真的做光學刷新，所以使用者眼睛看到的畫面一直停在舊內容。局部刷新改回原本確認可行的 `GU`，「每 5 次局部刷新自動升級一次全刷」的省電邏輯維持不變
+
 ## [0.2.0] - 2026-07-06
 
 ### Added

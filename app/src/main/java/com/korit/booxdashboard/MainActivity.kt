@@ -63,7 +63,7 @@ class MainActivity : AppCompatActivity() {
                 runOnUiThread {
                     renderDashboard()
                     // 每小時的例行整理不再強制整頁全刷（GC 對彩色面板是多輪波形的全域刷新，
-                    // 耗電明顯比局部刷新高）；改用跟互動同一套 REGAL／自動升級全刷的邏輯，
+                    // 耗電明顯比局部刷新高）；改用跟互動同一套 GU／自動升級全刷的邏輯，
                     // 一樣能定期恢復飽和度，但一天 24 次的「喚醒面板刷新」大部分變輕量，
                     // 只有真的跨天需要正確反映「今天」時才強制全刷。
                     if (rolledOver) EinkRefresh.full(dashboardImageView) else EinkRefresh.partial(dashboardImageView)
