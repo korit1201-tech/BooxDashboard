@@ -57,6 +57,13 @@ class MainActivity : AppCompatActivity() {
     private var selectedDate: LocalDate = LocalDate.now()
     private var lastKnownToday: LocalDate = LocalDate.now()
 
+    /**
+     * 監聽系統行事曆資料庫的變動。Google 同步一落地（或任何 App 改了行事曆），這裡就會被呼叫，
+     * 直接重畫畫面——所以就算「使用者點擊那一刻」同步還沒回來、畫的是舊資料，幾秒後同步一到
+     * 也會自動刷新成最新，不必再點一次；使用者完全不碰、只在手機上改，裝置也會自己跟著更新。
+     */
+    private var calendarObserver: android.database.ContentObserver? = null
+
     private val refreshHandler = Handler(Looper.getMainLooper())
     private val hourlyRefreshRunnable = object : Runnable {
         override fun run() {
@@ -136,8 +143,23 @@ class MainActivity : AppCompatActivity() {
 
         requestMissingPermissions()
         refreshHandler.postDelayed(hourlyRefreshRunnable, HOURLY_INTERVAL_MS)
+        registerCalendarObserver()
 
         maybeShowFreezeReminderOnFirstLaunch()
+    }
+
+    /** 註冊行事曆變更監聽：資料庫一有變動就自動重畫（見 calendarObserver 說明）。 */
+    private fun registerCalendarObserver() {
+        if (calendarObserver != null) return
+        val observer = object : android.database.ContentObserver(refreshHandler) {
+            override fun onChange(selfChange: Boolean) {
+                if (dashboardImageView.width == 0) return
+                renderDashboard()
+                EinkRefresh.partial(dashboardImageView)
+            }
+        }
+        calendarObserver = observer
+        contentResolver.registerContentObserver(CalendarContract.CONTENT_URI, true, observer)
     }
 
     /**
@@ -181,6 +203,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         refreshHandler.removeCallbacks(hourlyRefreshRunnable)
+        calendarObserver?.let { contentResolver.unregisterContentObserver(it) }
         super.onDestroy()
     }
 
