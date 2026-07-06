@@ -57,6 +57,10 @@ class MainActivity : AppCompatActivity() {
     private var selectedDate: LocalDate = LocalDate.now()
     private var lastKnownToday: LocalDate = LocalDate.now()
 
+    // 目前顯示的照片。行事曆變更觸發的自動重畫會沿用同一張（rotatePhoto=false），
+    // 只有每小時／使用者互動時才輪換新照片，避免行事曆一同步、照片就跟著亂閃。
+    private var currentPhoto: android.graphics.Bitmap? = null
+
     /**
      * 監聽系統行事曆資料庫的變動。Google 同步一落地（或任何 App 改了行事曆），這裡就會被呼叫，
      * 直接重畫畫面——所以就算「使用者點擊那一刻」同步還沒回來、畫的是舊資料，幾秒後同步一到
@@ -67,6 +71,7 @@ class MainActivity : AppCompatActivity() {
     private val refreshHandler = Handler(Looper.getMainLooper())
     private val hourlyRefreshRunnable = object : Runnable {
         override fun run() {
+            requestCalendarSync()
             val rolledOver = applyDateRolloverIfNeeded()
             Thread {
                 CalendarSubscriptions.syncAll(this@MainActivity)
@@ -148,14 +153,22 @@ class MainActivity : AppCompatActivity() {
         maybeShowFreezeReminderOnFirstLaunch()
     }
 
-    /** 註冊行事曆變更監聽：資料庫一有變動就自動重畫（見 calendarObserver 說明）。 */
+    // 行事曆變更後實際重畫的動作。用 debounce 合併「同一次同步造成的多筆 DB 寫入」，只重畫一次；
+    // rotatePhoto=false 代表只更新行事曆、不換照片（換照片交給每小時／使用者互動）。
+    private val calendarChangeRenderRunnable = Runnable {
+        if (dashboardImageView.width == 0) return@Runnable
+        renderDashboard(rotatePhoto = false)
+        EinkRefresh.partial(dashboardImageView)
+    }
+
+    /** 註冊行事曆變更監聽：資料庫一有變動就（去抖後）自動重畫（見 calendarObserver 說明）。 */
     private fun registerCalendarObserver() {
         if (calendarObserver != null) return
         val observer = object : android.database.ContentObserver(refreshHandler) {
             override fun onChange(selfChange: Boolean) {
-                if (dashboardImageView.width == 0) return
-                renderDashboard()
-                EinkRefresh.partial(dashboardImageView)
+                // 去抖：一次同步常會連續寫入多筆，延遲一小段再重畫，把連續變更併成一次
+                refreshHandler.removeCallbacks(calendarChangeRenderRunnable)
+                refreshHandler.postDelayed(calendarChangeRenderRunnable, CALENDAR_CHANGE_DEBOUNCE_MS)
             }
         }
         calendarObserver = observer
@@ -196,6 +209,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        requestCalendarSync()
         val rolledOver = applyDateRolloverIfNeeded()
         renderDashboard()
         if (rolledOver) EinkRefresh.full(dashboardImageView) else EinkRefresh.partial(dashboardImageView)
@@ -203,6 +217,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         refreshHandler.removeCallbacks(hourlyRefreshRunnable)
+        refreshHandler.removeCallbacks(calendarChangeRenderRunnable)
         calendarObserver?.let { contentResolver.unregisterContentObserver(it) }
         super.onDestroy()
     }
@@ -236,6 +251,7 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }
+        requestCalendarSync()
         renderDashboard()
         EinkRefresh.partial(dashboardImageView)
     }
@@ -459,12 +475,10 @@ class MainActivity : AppCompatActivity() {
             }
     }
 
-    private fun renderDashboard() {
+    private fun renderDashboard(rotatePhoto: Boolean = true) {
         val width = dashboardImageView.width
         val height = dashboardImageView.height
         if (width == 0 || height == 0) return
-
-        requestCalendarSync()
 
         val events: List<TodayEvent>
         if (hasPermission(Manifest.permission.READ_CALENDAR)) {
@@ -487,7 +501,10 @@ class MainActivity : AppCompatActivity() {
             "${selectedDate.monthValue}/${selectedDate.dayOfMonth} 事項"
         }
 
-        val photo = PhotoRepository.pickRandomPhoto(this, width)
+        if (rotatePhoto || currentPhoto == null) {
+            currentPhoto = PhotoRepository.pickRandomPhoto(this, width)
+        }
+        val photo = currentPhoto
 
         val bitmap = DashboardRenderer.render(
             width = width,
@@ -507,5 +524,6 @@ class MainActivity : AppCompatActivity() {
         private const val MAX_PICKED_PHOTOS = 50
         private const val PREFS_NAME = "boox_dashboard_prefs"
         private const val KEY_FREEZE_HINT_SHOWN = "freeze_hint_shown"
+        private const val CALENDAR_CHANGE_DEBOUNCE_MS = 800L
     }
 }

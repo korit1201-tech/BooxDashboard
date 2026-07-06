@@ -2,6 +2,15 @@
 
 本專案的重要變更都記錄在這份檔案。格式參考 [Keep a Changelog](https://keepachangelog.com/)。
 
+## [0.2.4] - 2026-07-06
+
+### Fixed
+- **修正照片不停閃動亂換**：0.2.3 的 ContentObserver 造成無窮迴圈——`renderDashboard()` 開頭會 `requestCalendarSync()`（要求同步）→ 同步寫動行事曆 DB → 觸發 observer → 又 `renderDashboard()` → 又要求同步…每一輪都重抽一張隨機照片，所以照片狂閃。修法：
+  - 把 `requestCalendarSync()` 移出 `renderDashboard()`，改成只在使用者互動（點擊）／回前景／每小時整理時才要求同步，打斷迴圈。
+  - 行事曆變更觸發的自動重畫改為**不換照片**（沿用目前這張，`rotatePhoto=false`）；照片只在每小時或使用者互動時才輪換。
+  - observer 加上 800ms 去抖動，把「同一次同步的多筆 DB 寫入」併成一次重畫。
+  - 行事曆自動刷新（0.2.3 的核心功能）維持不變且已再次實機驗證：手機上改事項，裝置數秒內自動更新事項、照片保持不動。
+
 ## [0.2.3] - 2026-07-06
 
 ### Added
