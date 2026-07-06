@@ -2,7 +2,7 @@
 
 本專案的重要變更都記錄在這份檔案。格式參考 [Keep a Changelog](https://keepachangelog.com/)。
 
-## [Unreleased]
+## [0.2.0] - 2026-07-06
 
 ### Added
 - `EinkRefresh` 重構：互動觸發的局部刷新改用 `UpdateMode.REGAL`（官方文件說是殘影最少的局部模式，取代原本沿用 Phase 1 demo 的 `GU`），並新增自動計數——連續 5 次局部刷新後自動升級成一次 `GC` 全刷，藉此定期恢復 Kaleido Plus 彩色圖層的飽和度，不必等整點的 hourly 全刷或使用者手動長按
